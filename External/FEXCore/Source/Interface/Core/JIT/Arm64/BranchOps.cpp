@@ -158,6 +158,15 @@ DEF_OP(CondJump) {
 }
 
 DEF_OP(Syscall) {
+  PushDynamicRegsAndLR(TMP1);
+  SpillStaticRegs(TMP1); // spill to ctx before ra64 spill
+  ldr(ARMEmitter::XReg::x0, STATE, offsetof(FEXCore::Core::CpuStateFrame, ReturningStackLocation));
+  add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::XReg::x0, 0);
+  PopCalleeSavedRegisters();
+
+
+  ret();
+#if 0
   auto Op = IROp->C<IR::IROp_Syscall>();
   // Arguments are passed as follows:
   // X0: SyscallHandler
@@ -222,6 +231,7 @@ DEF_OP(Syscall) {
       mov(ARMEmitter::Size::i64Bit, GetReg(Node), ARMEmitter::Reg::r0);
     }
   }
+#endif
 }
 
 DEF_OP(InlineSyscall) {

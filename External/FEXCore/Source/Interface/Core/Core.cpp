@@ -1151,7 +1151,7 @@ namespace FEXCore::Context {
   }
 
   void ContextImpl::ExecutionThread(FEXCore::Core::InternalThreadState *Thread) {
-    Thread->ExitReason = FEXCore::Context::ExitReason::EXIT_WAITING;
+/*    Thread->ExitReason = FEXCore::Context::ExitReason::EXIT_WAITING;
 
     InitializeThreadTLSData(Thread);
 #ifndef _WIN32
@@ -1166,7 +1166,7 @@ namespace FEXCore::Context {
     if (Thread != static_cast<ContextImpl*>(Thread->CTX)->ParentThread || StartPaused || Thread->StartPaused) {
       // Parent thread doesn't need to wait to run
       Thread->StartRunning.Wait();
-    }
+    }*/
 
     if (!Thread->RunningEvents.EarlyExit.load()) {
       Thread->RunningEvents.WaitingToStart = false;
@@ -1185,7 +1185,7 @@ namespace FEXCore::Context {
       // Use the thread's object cache ref counter for this
       CodeSerialize::CodeObjectSerializeService::WaitForEmptyJobQueue(&Thread->ObjectCacheRefCounter);
     }
-
+/*
     // If it is the parent thread that died then just leave
     FEX_TODO("This doesn't make sense when the parent thread doesn't outlive its children");
 
@@ -1209,7 +1209,7 @@ namespace FEXCore::Context {
     // If the parent thread is waiting to join, then we can't destroy our thread object
     if (!Thread->DestroyedByParent && Thread != static_cast<ContextImpl*>(Thread->CTX)->ParentThread) {
       Thread->CTX->DestroyThread(Thread);
-    }
+    }*/
   }
 
   static void InvalidateGuestThreadCodeRange(FEXCore::Core::InternalThreadState *Thread, uint64_t Start, uint64_t Length) {
