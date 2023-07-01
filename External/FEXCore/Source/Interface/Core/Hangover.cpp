@@ -19,7 +19,6 @@ $end_info$
 #include <FEXCore/Utils/Telemetry.h>
 #include <FEXCore/Utils/Threads.h>
 #include <FEXCore/Utils/Profiler.h>
-#include <FEXCore/Utils/CompilerDefs.h>
 
 #include <atomic>
 #include <cerrno>
@@ -122,64 +121,67 @@ typedef struct _XSAVE_FORMAT {
 } XSAVE_FORMAT, *PXSAVE_FORMAT;
 #endif
 
-#ifdef __cplusplus
-#define EXTERNC extern "C"
-#else
-#define EXTERNC
-#endif
-
-EXTERNC void __attribute__ ((visibility ("default"))) hangover_fex_init(void);
-EXTERNC void __attribute__ ((visibility ("default"))) hangover_fex_run(void* wowteb, I386_CONTEXT* ctx);
-
-#undef EXTERNC
-
 class DummySyscallHandler: public FEXCore::HLE::SyscallHandler {
-  public:
-
+public:
   uint64_t HandleSyscall(FEXCore::Core::CpuStateFrame *Frame, FEXCore::HLE::SyscallArguments *Args) override {
-      auto Thread = Frame->Thread;
-      Thread->CTX->StopThread(Thread);
     return 0;
   }
 
   FEXCore::HLE::SyscallABI GetSyscallABI(uint64_t Syscall) override {
-    LOGMAN_MSG_A_FMT("Syscalls not implemented");
     return {0, false, 0 };
   }
 
-  // These are no-ops implementations of the SyscallHandler API
-  std::shared_mutex StubMutex;
   FEXCore::HLE::AOTIRCacheEntryLookupResult LookupAOTIRCacheEntry(FEXCore::Core::InternalThreadState *Thread, uint64_t GuestAddr) override {
     return {0, 0};
   }
 };
 
-static fextl::unique_ptr<FEXCore::Context::Context> CTX;
-void hangover_fex_init(void)
+class DummySignalDelegator final : public FEXCore::SignalDelegator, public FEXCore::Allocator::FEXAllocOperators {
+public:
+  DummySignalDelegator() {}
+  ~DummySignalDelegator() override {}
+
+  void CheckXIDHandler() override {}
+
+  void SignalThread(FEXCore::Core::InternalThreadState *Thread, FEXCore::Core::SignalEvent Event) override {}
+
+protected:
+  void HandleGuestSignal(FEXCore::Core::InternalThreadState *Thread, int Signal, void *Info, void *UContext) override {}
+
+  void RegisterFrontendTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
+  void UninstallFrontendTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
+
+  void FrontendRegisterHostSignalHandler(int Signal, FEXCore::HostSignalDelegatorFunction Func, bool Required) override {}
+  void FrontendRegisterFrontendHostSignalHandler(int Signal, FEXCore::HostSignalDelegatorFunction Func, bool Required) override {}
+};
+
+static fextl::unique_ptr<FEXCore::Context::Context> CTX;// = FEXCore::Context::Context::CreateNewContext();
+extern "C" __attribute__((visibility ("default"))) void hangover_fex_init(void)
 {
-  const bool IsInterpreter = false;
-  FEXCore::Config::Initialize();
-  FEXCore::Config::ReloadMetaLayer();
-  FEXCore::Config::Set(FEXCore::Config::CONFIG_IS_INTERPRETER, IsInterpreter ? "1" : "0");
-  FEXCore::Config::Set(FEXCore::Config::CONFIG_INTERPRETER_INSTALLED, /*IsInterpreterInstalled()*/ false ? "1" : "0");
-  
-  FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_IS64BIT_MODE, /*Loader.Is64BitMode()*/ false ? "1" : "0");
-  
-  FEXCore::Context::InitializeStaticTables(/*Loader.Is64BitMode()*/ false ? FEXCore::Context::MODE_64BIT : FEXCore::Context::MODE_32BIT);
-  
-  CTX = FEXCore::Context::Context::CreateNewContext();
-  CTX->InitializeContext();
-  static auto SyscallHandler = new DummySyscallHandler();
-  CTX->SetSyscallHandler(SyscallHandler);
-  printf("ALLES NEU 3 \n");
+	FEXCore::Config::Initialize();
+	FEXCore::Config::ReloadMetaLayer();
+
+	FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_IS_INTERPRETER, "0");
+	FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_INTERPRETER_INSTALLED, "0");
+	FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_IS64BIT_MODE, "0");
+    FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_TSOENABLED, "0");
+    FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_MULTIBLOCK, "0");
+    FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_X87REDUCEDPRECISION, "1");
+    FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_BLOCKJITNAMING, "1");
+
+	FEXCore::Context::InitializeStaticTables( FEXCore::Context::MODE_32BIT);
+
+	CTX = FEXCore::Context::Context::CreateNewContext();
+	CTX->InitializeContext();
+	CTX->SetSignalDelegator(new DummySignalDelegator());
+	CTX->SetSyscallHandler(new DummySyscallHandler());
 }
 
 static thread_local FEXCore::Core::InternalThreadState *Thread;
 static FEXCore::Core::InternalThreadState *mainThread;
 
-void hangover_fex_run(void* wowteb, I386_CONTEXT* ctx)
+extern "C" __attribute__((visibility ("default"))) void hangover_fex_run(void* wowteb, I386_CONTEXT* ctx)
 {
-
     static int once;
     if (!once)
     {
@@ -189,7 +191,9 @@ void hangover_fex_run(void* wowteb, I386_CONTEXT* ctx)
     }
     if (!Thread)
     {
-        FEXCore::Core::CPUState NewThreadState;
+        FEXCore::Core::CPUState NewThreadState{};
+        memset(NewThreadState.gdt, 0, sizeof(FEXCore::Core::CPUState::gdt));
+        //NewThreadState.es_cached = NewThreadState.cs_cached = NewThreadState.ss_cached = NewThreadState.ds_cached = NewThreadState.gs_cached = NewThreadState.fs_cached = 0;
         Thread = CTX->CreateThread(&NewThreadState, mainThread->ThreadManager.GetTID());
         Thread->DestroyedByParent = 1;
     }
@@ -301,6 +305,7 @@ void hangover_fex_run(void* wowteb, I386_CONTEXT* ctx)
         ctx->SegDs = Thread->CurrentFrame->State.ds_idx;
         ctx->SegFs = Thread->CurrentFrame->State.fs_idx;
         ctx->SegGs = Thread->CurrentFrame->State.gs_idx;
+
         /*debug regs*/
         /*float*/
         memcpy(&ctx->FloatSave.RegisterArea[0],  &Thread->CurrentFrame->State.mm[0], 10);
