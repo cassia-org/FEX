@@ -340,10 +340,13 @@ extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t wowteb, I3
         (Thread->CurrentFrame->State.flags[FEXCore::X86State::X87FLAG_C1_LOC] << 9) |
         (Thread->CurrentFrame->State.flags[FEXCore::X86State::X87FLAG_C2_LOC] << 10) |
         (Thread->CurrentFrame->State.flags[FEXCore::X86State::X87FLAG_C3_LOC] << 14);
-
     }
 }
 
-void ho_C(void)
+extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range( uint64_t start, uint64_t length )
 {
+    if (!CTX)
+        return;
+
+    CTX->InvalidateGuestCodeRange(Thread, start, length);
 }
