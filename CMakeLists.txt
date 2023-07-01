@@ -533,6 +533,8 @@ if (BUILD_THUNKS)
   add_dependencies(uninstall uninstall_guest-libs-32)
 endif()
 
+add_subdirectory(Hangover)
+
 set(FEX_VERSION_MAJOR "0")
 set(FEX_VERSION_MINOR "0")
 set(FEX_VERSION_PATCH "0")
