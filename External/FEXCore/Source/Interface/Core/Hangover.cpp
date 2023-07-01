@@ -230,15 +230,21 @@ extern "C" __attribute__((visibility ("default"))) void hangover_fex_run(void* w
         Thread->CurrentFrame->State.flags[FEXCore::X86State::RFLAG_VIP_LOC] = ctx->EFlags & 0x100000;
         Thread->CurrentFrame->State.flags[FEXCore::X86State::RFLAG_ID_LOC] = ctx->EFlags & 0x200000;
 
-        Thread->CurrentFrame->State.es_idx = ctx->SegEs;
-        Thread->CurrentFrame->State.cs_idx = ctx->SegCs;
-        Thread->CurrentFrame->State.ss_idx = ctx->SegSs;
-        Thread->CurrentFrame->State.ds_idx = ctx->SegDs;
-        Thread->CurrentFrame->State.fs_idx = ctx->SegFs;
-        Thread->CurrentFrame->State.gs_idx = ctx->SegGs;
+        Thread->CurrentFrame->State.es_idx = ctx->SegEs & 0xFFFF;
+        Thread->CurrentFrame->State.cs_idx = ctx->SegCs & 0xFFFF;
+        Thread->CurrentFrame->State.ss_idx = ctx->SegSs & 0xFFFF;
+        Thread->CurrentFrame->State.ds_idx = ctx->SegDs & 0xFFFF;
+        Thread->CurrentFrame->State.fs_idx = ctx->SegFs & 0xFFFF;
+        Thread->CurrentFrame->State.gs_idx = ctx->SegGs & 0xFFFF;
 
+        // The TEB is the only populated GDT entry by default
+        Thread->CurrentFrame->State.gdt[(ctx->SegFs & 0xFFFF) >> 3].base = (uint64_t)wowteb;
         Thread->CurrentFrame->State.fs_cached = (uint64_t)wowteb;
-        Thread->CurrentFrame->State.gdt[Thread->CurrentFrame->State.fs_idx >> 3].base = (uint64_t)wowteb;
+        Thread->CurrentFrame->State.es_cached = 0;
+        Thread->CurrentFrame->State.cs_cached = 0;
+        Thread->CurrentFrame->State.ss_cached = 0;
+        Thread->CurrentFrame->State.ds_cached = 0;
+
         /*debug regs*/
         /*float*/
         memcpy(&Thread->CurrentFrame->State.mm[0], &ctx->FloatSave.RegisterArea[0],  10);
