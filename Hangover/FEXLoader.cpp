@@ -86,7 +86,7 @@ extern "C" __attribute__((visibility ("default"))) void ho_A() {
 static thread_local FEXCore::Core::InternalThreadState *Thread;
 static FEXCore::Core::InternalThreadState *MainThread;
 
-static void LoadStateFromWinContext(FEXCore::Core::CPUState& State, uint64_t WowTeb, I386_CONTEXT* Context) {
+static void LoadStateFromWinContext(FEXCore::Core::CPUState& State, uint64_t WowTeb, WOW64_CONTEXT* Context) {
   // General register state
 
   State.gregs[FEXCore::X86State::REG_RAX] = Context->Eax;
@@ -135,7 +135,7 @@ static void LoadStateFromWinContext(FEXCore::Core::CPUState& State, uint64_t Wow
   State.FTW = XSave->TagWord;
 }
 
-static void StoreWinContextFromState(FEXCore::Core::CPUState& State, uint64_t WowTeb, I386_CONTEXT* Context) {
+static void StoreWinContextFromState(FEXCore::Core::CPUState& State, WOW64_CONTEXT* Context) {
   // General register state
 
   Context->Eax = State.gregs[FEXCore::X86State::REG_RAX];
@@ -180,7 +180,7 @@ static void StoreWinContextFromState(FEXCore::Core::CPUState& State, uint64_t Wo
   fpux_to_fpu(&Context->FloatSave, XSave);
 }
 
-extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t WowTeb, I386_CONTEXT* Context) {
+extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t WowTeb, WOW64_CONTEXT* Context) {
   if (!MainThread) {
     Thread = CTX->InitCore(Context->Eip, Context->Esp);
     MainThread = Thread;
@@ -194,7 +194,7 @@ extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t WowTeb, I3
     Thread->DestroyedByParent = 1;
   }
 
-  static constexpr uint32_t RequiredContextFlags = CONTEXT_I386_FULL | CONTEXT_I386_DEBUG_REGISTERS;
+  static constexpr uint32_t RequiredContextFlags = WOW64_CONTEXT_FULL | WOW64_CONTEXT_EXTENDED_REGISTERS;
 
   if ((Context->ContextFlags & RequiredContextFlags) != RequiredContextFlags) {
     fprintf(stderr, "Incomplete context!\n");
