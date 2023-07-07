@@ -667,6 +667,7 @@ namespace FEXCore::Context {
     delete Thread;
   }
 
+#ifndef _WIN32
   void ContextImpl::UnlockAfterFork(FEXCore::Core::InternalThreadState *LiveThread, bool Child) {
     Allocator::UnlockAfterFork(LiveThread, Child);
 
@@ -720,6 +721,7 @@ namespace FEXCore::Context {
     CodeInvalidationMutex.lock();
     Allocator::LockBeforeFork(Thread);
   }
+#endif
 
   void ContextImpl::AddBlockMapping(FEXCore::Core::InternalThreadState *Thread, uint64_t Address, void *Ptr) {
     Thread->LookupCache->AddBlockMapping(Address, Ptr);
