@@ -38,6 +38,10 @@ $end_info$
 #include <type_traits>
 #include <unistd.h>
 
+
+#define FD_ZERO(fdsetp)
+
+
 ARG_TO_STR(FEX::HLE::x32::compat_ptr<FEX::HLE::x32::sigset_argpack32>, "%lx")
 
 namespace FEXCore::Core {

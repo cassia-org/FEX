@@ -91,6 +91,7 @@ set (SRCS
   Interface/Core/CPUID.cpp
   Interface/Core/Frontend.cpp
   Interface/Core/GdbServer.cpp
+  Interface/Core/Hangover.cpp
   Interface/Core/HostFeatures.cpp
   Interface/Core/ObjectCache/JobHandling.cpp
   Interface/Core/ObjectCache/NamedRegionObjectHandler.cpp
