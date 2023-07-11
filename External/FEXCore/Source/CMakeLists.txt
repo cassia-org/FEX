@@ -411,6 +411,10 @@ function(AddLibrary Name Type)
     # Change the suffixes otherwise cmake continues using .a and .so
     if (${Type} STREQUAL SHARED)
       set_target_properties(${Name} PROPERTIES SUFFIX ".dll")
+      target_link_options(${Name}
+        PRIVATE
+        "LINKER:-static"
+      )
     elseif(${Type} STREQUAL STATIC)
       set_target_properties(${Name} PROPERTIES SUFFIX ".lib")
     endif()
