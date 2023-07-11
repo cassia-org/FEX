@@ -15,12 +15,56 @@ $end_info$
 #include <FEXCore/Utils/Allocator.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Threads.h>
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
+#include <windef.h>
 #include "Context.h"
+
+// From FEXServer
+namespace Logging {
+  const char *GetCharLevel(uint32_t Level) {
+    switch (Level) {
+    case LogMan::NONE:
+      return "NONE";
+      break;
+    case LogMan::ASSERT:
+      return "ASSERT";
+      break;
+    case LogMan::ERROR:
+      return "ERROR";
+      break;
+    case LogMan::DEBUG:
+      return "DEBUG";
+      break;
+    case LogMan::INFO:
+      return "Info";
+      break;
+    case LogMan::STDOUT:
+      return "STDOUT";
+      break;
+    case LogMan::STDERR:
+      return "STDERR";
+      break;
+    default:
+      return "???";
+      break;
+    }
+  }
+
+  void MsgHandler(LogMan::DebugLevels Level, char const *Message) {
+    const auto Output = fmt::format("[{}] {}\n", GetCharLevel(Level), Message);
+    write(STDOUT_FILENO, Output.c_str(), Output.size());
+  }
+
+  void AssertHandler(char const *Message) {
+    const auto Output = fmt::format("[ASSERT] {}\n", Message);
+    write(STDOUT_FILENO, Output.c_str(), Output.size());
+  }
+}
 
 
 class DummySyscallHandler : public FEXCore::HLE::SyscallHandler {
@@ -64,6 +108,9 @@ DummySignalDelegator SignalDelegator;
 DummySyscallHandler SyscallHandler;
 
 extern "C" __attribute__((visibility ("default"))) void ho_A() {
+  LogMan::Throw::InstallHandler(Logging::AssertHandler);
+  LogMan::Msg::InstallHandler(Logging::MsgHandler);
+
   FEXCore::Config::Initialize();
   FEXCore::Config::ReloadMetaLayer();
 
