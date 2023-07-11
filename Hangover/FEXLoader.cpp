@@ -93,6 +93,10 @@ public:
 
   void SignalThread(FEXCore::Core::InternalThreadState *Thread, FEXCore::Core::SignalEvent Event) override {}
 
+  bool IsAddressInDispatcher(uint64_t Address) const {
+    return Address >= Config.DispatcherBegin && Address < Config.DispatcherEnd;
+  }
+
 protected:
   void HandleGuestSignal(FEXCore::Core::InternalThreadState *Thread, int Signal, void *Info, void *UContext) override {}
 
@@ -277,4 +281,8 @@ extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_unaligned_access_h
 
   Context->Pc += Result.second;
   return true;
+}
+
+extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_address_in_jit(DWORD64 addr) {
+  return Thread->CPUBackend->IsAddressInCodeBuffer(addr) || SignalDelegator.IsAddressInDispatcher(addr);
 }
