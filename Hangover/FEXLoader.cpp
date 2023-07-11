@@ -84,6 +84,7 @@ public:
   }
 };
 
+// TODO, this abstraction doesn't really work for SEH
 class DummySignalDelegator final : public FEXCore::SignalDelegator, public FEXCore::Allocator::FEXAllocOperators {
 public:
   DummySignalDelegator() {}
@@ -92,6 +93,10 @@ public:
   void CheckXIDHandler() override {}
 
   void SignalThread(FEXCore::Core::InternalThreadState *Thread, FEXCore::Core::SignalEvent Event) override {}
+
+  const FEXCore::SignalDelegator::SignalDelegatorConfig &GetConfig() const {
+    return Config;
+  }
 
   bool IsAddressInDispatcher(uint64_t Address) const {
     return Address >= Config.DispatcherBegin && Address < Config.DispatcherEnd;
@@ -266,6 +271,35 @@ extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range
   }
 
   CTX->InvalidateGuestCodeRange(Thread, Start, Length);
+}
+
+extern "C" __attribute__((visibility ("default"))) void ho_reconstruct_x86_context(WOW64_CONTEXT* WowContext, CONTEXT* Context) {
+  memset(WowContext, 0, sizeof(*WowContext));
+
+  WowContext->ContextFlags = WOW64_CONTEXT_ALL;
+
+  auto* XSave = reinterpret_cast<XSAVE_FORMAT*>(WowContext->ExtendedRegisters);
+  XSave->ControlWord = 0x27f;
+  XSave->MxCsr = 0x1f80;
+
+  const auto &Config = SignalDelegator.GetConfig();
+  auto& State = Thread->CurrentFrame->State;
+
+  State.rip = CTX->RestoreRIPFromHostPC(Thread, Context->Pc);
+
+  if (Thread->CPUBackend->IsAddressInCodeBuffer(Context->Pc)) {
+    // Spill all SRA GPRs
+    for (size_t i = 0; i < Config.SRAGPRCount; i++) {
+      State.gregs[i] = Context->X[Config.SRAGPRMapping[i]];
+    }
+
+    // Spill all SRA FPRs
+    for (size_t i = 0; i < Config.SRAFPRCount; i++) {
+      memcpy(&State.xmm.sse.data[i][0], &Context->V[Config.SRAFPRMapping[i]], sizeof(__uint128_t));
+    }
+  }
+
+  StoreWinContextFromState(State, WowContext);
 }
 
 extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_unaligned_access_handler(CONTEXT* Context) {
