@@ -107,6 +107,7 @@ static fextl::unique_ptr<FEXCore::Context::Context> CTX;
 DummySignalDelegator SignalDelegator;
 DummySyscallHandler SyscallHandler;
 
+static constexpr bool ParanoidTSO = false;
 extern "C" __attribute__((visibility ("default"))) void ho_init() {
   LogMan::Throw::InstallHandler(Logging::AssertHandler);
   LogMan::Msg::InstallHandler(Logging::MsgHandler);
@@ -118,6 +119,7 @@ extern "C" __attribute__((visibility ("default"))) void ho_init() {
   FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_INTERPRETER_INSTALLED, "0");
   FEXCore::Config::EraseSet(FEXCore::Config::CONFIG_IS64BIT_MODE, "0");
   FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_TSOENABLED, "0");
+  FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_PARANOIDTSO, ParanoidTSO ? "1" : "0");
   FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_MULTIBLOCK, "0");
   FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_X87REDUCEDPRECISION, "0");
   FEXCore::Config::EraseSet(FEXCore::Config::ConfigOption::CONFIG_BLOCKJITNAMING, "1");
@@ -260,4 +262,19 @@ extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range
   }
 
   CTX->InvalidateGuestCodeRange(Thread, Start, Length);
+}
+
+extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_unaligned_access_handler(CONTEXT* Context) {
+  if (!Thread->CPUBackend->IsAddressInCodeBuffer(Context->Pc)) {
+    // Wasn't a sigbus in JIT code
+    return false;
+  }
+
+  const auto Result = FEXCore::ArchHelpers::Arm64::HandleUnalignedAccess(ParanoidTSO, Context->Pc, &Context->X0);
+  if (!Result.first) {
+    return false;
+  }
+
+  Context->Pc += Result.second;
+  return true;
 }
