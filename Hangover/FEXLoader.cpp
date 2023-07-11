@@ -107,7 +107,7 @@ static fextl::unique_ptr<FEXCore::Context::Context> CTX;
 DummySignalDelegator SignalDelegator;
 DummySyscallHandler SyscallHandler;
 
-extern "C" __attribute__((visibility ("default"))) void ho_A() {
+extern "C" __attribute__((visibility ("default"))) void ho_init() {
   LogMan::Throw::InstallHandler(Logging::AssertHandler);
   LogMan::Msg::InstallHandler(Logging::MsgHandler);
 
@@ -227,7 +227,7 @@ static void StoreWinContextFromState(FEXCore::Core::CPUState& State, WOW64_CONTE
   fpux_to_fpu(&Context->FloatSave, XSave);
 }
 
-extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t WowTeb, WOW64_CONTEXT* Context) {
+extern "C" __attribute__((visibility ("default"))) void ho_run(uint64_t WowTeb, WOW64_CONTEXT* Context) {
   if (!MainThread) {
     Thread = CTX->InitCore(Context->Eip, Context->Esp);
     MainThread = Thread;
@@ -251,10 +251,10 @@ extern "C" __attribute__((visibility ("default"))) void ho_B(uint64_t WowTeb, WO
 
   CTX->ExecutionThread(Thread);
 
-  StoreWinContextFromState(Thread->CurrentFrame->State, WowTeb, Context);
+  StoreWinContextFromState(Thread->CurrentFrame->State, Context);
 }
 
-extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range(uint64_t Start, uint64_t Length) {
+extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range(DWORD64 Start, DWORD64 Length) {
   if (!CTX) {
     return;
   }
