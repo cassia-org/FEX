@@ -192,3 +192,42 @@ typedef struct _XSAVE_FORMAT {
     __uint128_t XmmRegisters[16];  /* 0a0 */
     uint8_t Reserved4[96];      /* 1a0 */
 } XSAVE_FORMAT, *PXSAVE_FORMAT;
+
+static void fpux_to_fpu( I386_FLOATING_SAVE_AREA *fpu, const _XSAVE_FORMAT *fpux )
+{
+    unsigned int i, tag, stack_top;
+
+    fpu->ControlWord   = fpux->ControlWord;
+    fpu->StatusWord    = fpux->StatusWord;
+    fpu->ErrorOffset   = fpux->ErrorOffset;
+    fpu->ErrorSelector = fpux->ErrorSelector | (fpux->ErrorOpcode << 16);
+    fpu->DataOffset    = fpux->DataOffset;
+    fpu->DataSelector  = fpux->DataSelector;
+    fpu->Cr0NpxState   = fpux->StatusWord | 0xffff0000;
+
+    stack_top = (fpux->StatusWord >> 11) & 7;
+    fpu->TagWord = 0xffff0000;
+    for (i = 0; i < 8; i++)
+    {
+        memcpy( &fpu->RegisterArea[10 * i], &fpux->FloatRegisters[i], 10 );
+        if (!(fpux->TagWord & (1 << i)))
+            tag = 3;  /* empty */
+        else
+        {
+            auto *reg = reinterpret_cast<const M128A *>(&fpux->FloatRegisters[(i - stack_top) & 7]);
+            if ((reg->High & 0x7fff) == 0x7fff)  /* exponent all ones */
+                tag = 2;  /* special */
+            else if (!(reg->High & 0x7fff))  /* exponent all zeroes */
+            {
+                if (reg->Low) tag = 2;  /* special */
+                else tag = 1;  /* zero */
+            }
+            else
+            {
+                if (reg->Low >> 63) tag = 0;  /* valid */
+                else tag = 2;  /* special */
+            }
+        }
+        fpu->TagWord |= tag << (2 * i);
+    }
+}
