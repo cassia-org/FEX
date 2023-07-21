@@ -90,6 +90,9 @@ public:
   DummySignalDelegator() {}
   ~DummySignalDelegator() override {}
 
+  void RegisterTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
+  void UninstallTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
+
   void CheckXIDHandler() override {}
 
   void SignalThread(FEXCore::Core::InternalThreadState *Thread, FEXCore::Core::SignalEvent Event) override {}
@@ -103,10 +106,10 @@ public:
   }
 
 protected:
+  FEXCore::Core::InternalThreadState *GetTLSThread() override {
+    return nullptr;
+  }
   void HandleGuestSignal(FEXCore::Core::InternalThreadState *Thread, int Signal, void *Info, void *UContext) override {}
-
-  void RegisterFrontendTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
-  void UninstallFrontendTLSState(FEXCore::Core::InternalThreadState *Thread) override {}
 
   void FrontendRegisterHostSignalHandler(int Signal, FEXCore::HostSignalDelegatorFunction Func, bool Required) override {}
   void FrontendRegisterFrontendHostSignalHandler(int Signal, FEXCore::HostSignalDelegatorFunction Func, bool Required) override {}
