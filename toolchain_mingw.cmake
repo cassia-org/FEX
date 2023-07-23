@@ -1,17 +1,14 @@
-set(MINGW_PATH "" CACHE STRING "Path to an extracted llvm-mingw installation")
-set(MINGW_PREFIX "" CACHE STRING "MINGW compiler architecture prefix")
+set(MINGW_TRIPLE "" CACHE STRING "MinGW compiler target architecture triple")
 
-set(CMAKE_RC_COMPILER ${MINGW_PATH}/bin/${MINGW_PREFIX}-windres)
-set(CMAKE_C_COMPILER ${MINGW_PATH}/bin/${MINGW_PREFIX}-clang)
-set(CMAKE_CXX_COMPILER ${MINGW_PATH}/bin/${MINGW_PREFIX}-clang++)
-set(CMAKE_SHARED_LINKER_FLAGS "-static -static-libgcc -static-libstdc++ -Wl,--file-alignment=4096,/mllvm:-align-loops=1")
-set(CMAKE_EXE_LINKER_FLAGS "-static -static-libgcc -static-libstdc++ -Wl,--file-alignment=4096,/mllvm:-align-loops=1")
+set(CMAKE_RC_COMPILER ${MINGW_TRIPLE}-windres)
+set(CMAKE_C_COMPILER ${MINGW_TRIPLE}-clang)
+set(CMAKE_CXX_COMPILER ${MINGW_TRIPLE}-clang++)
+
+# Compile everything as static to avoid requiring the MinGW runtime libraries, force page aligned sections so that
+# debug symbols work correctly, and disable loop alignment to workaround an LLVM bug
+# (https://github.com/llvm/llvm-project/issues/47432)
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++ -Wl,--file-alignment=4096,/mllvm:-align-loops=1")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++ -Wl,--file-alignment=4096,/mllvm:-align-loops=1")
 
 set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_SYSTEM_PROCESSOR ${MINGW_PREFIX})
-
-set(CMAKE_FIND_ROOT_PATH ${MINGW_PATH}/${MINGW_PREFIX})
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-
+set(CMAKE_SYSTEM_PROCESSOR ${MINGW_TRIPLE})
