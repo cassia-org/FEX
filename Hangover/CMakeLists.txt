@@ -10,3 +10,7 @@ target_link_libraries(hofex
     FEXCore
     Common
 )
+install(TARGETS hofex
+  RUNTIME
+  DESTINATION bin
+  COMPONENT runtime)
