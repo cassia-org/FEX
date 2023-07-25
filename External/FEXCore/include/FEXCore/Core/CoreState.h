@@ -115,6 +115,8 @@ namespace FEXCore::Core {
     // Since this memory region is thread local, we use NonAtomicRefCounter for fast atomic access.
     NonAtomicRefCounter<uint64_t> *DeferredSignalFaultAddress;
 
+    bool ReturnPending;
+
     static constexpr size_t FLAG_SIZE = sizeof(flags[0]);
     static constexpr size_t GDT_SIZE = sizeof(gdt[0]);
     static constexpr size_t GPR_REG_SIZE = sizeof(gregs[0]);
@@ -145,6 +147,8 @@ namespace FEXCore::Core {
       flags[9] = 1; ///< Interrupt flag - Always 1.
       FCW = 0x37F;
       FTW = 0xFFFF;
+
+      ReturnPending = false;
     }
   };
   static_assert(std::is_trivially_copyable_v<CPUState>, "Needs to be trivial");

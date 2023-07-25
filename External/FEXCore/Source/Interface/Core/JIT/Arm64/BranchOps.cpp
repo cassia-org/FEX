@@ -49,11 +49,16 @@ DEF_OP(ExitFunction) {
 
   ResetStack();
 
+  ARMEmitter::ForwardLabel l_Return;
+  ARMEmitter::Register RipReg{TMP2};
   uint64_t NewRIP;
-
   if (IsInlineConstant(Op->NewRIP, &NewRIP) || IsInlineEntrypointOffset(Op->NewRIP, &NewRIP)) {
     ARMEmitter::ForwardLabel l_BranchHost;
     ARMEmitter::ForwardLabel l_BranchGuest;
+    ARMEmitter::ForwardLabel l_LoadRipReturn;
+
+    ldr(ARMEmitter::XReg::x0, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.ReturnPending));
+    tbnz(ARMEmitter::XReg::x0, 0, &l_LoadRipReturn);
 
     ldr(ARMEmitter::XReg::x0, &l_BranchHost);
     blr(ARMEmitter::Reg::r0);
@@ -63,10 +68,15 @@ DEF_OP(ExitFunction) {
     Bind(&l_BranchGuest);
     dc64(NewRIP);
 
+    Bind(&l_LoadRipReturn);
+    LoadConstant(ARMEmitter::Size::i64Bit, RipReg, NewRIP);
+    b(&l_Return);
   } else {
+    ARMEmitter::ForwardLabel l_FullLookup;
+    RipReg = GetReg(Op->NewRIP.ID());
 
-    ARMEmitter::ForwardLabel FullLookup;
-    auto RipReg = GetReg(Op->NewRIP.ID());
+    ldr(ARMEmitter::XReg::x0, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.ReturnPending));
+    tbnz(ARMEmitter::XReg::x0, 0, &l_Return);
 
     // L1 Cache
     ldr(ARMEmitter::XReg::x0, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.Common.L1Pointer));
@@ -76,14 +86,23 @@ DEF_OP(ExitFunction) {
 
     ldp<ARMEmitter::IndexType::OFFSET>(ARMEmitter::XReg::x1, ARMEmitter::XReg::x0, ARMEmitter::Reg::r0, 0);
     cmp(ARMEmitter::XReg::x0, RipReg.X());
-    b(ARMEmitter::Condition::CC_NE, &FullLookup);
+    b(ARMEmitter::Condition::CC_NE, &l_FullLookup);
     br(ARMEmitter::Reg::r1);
 
-    Bind(&FullLookup);
+    Bind(&l_FullLookup);
     ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.Common.DispatcherLoopTop));
     str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
     br(TMP1);
   }
+
+  Bind(&l_Return);
+  str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
+  str(ARMEmitter::XReg::zr, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.ReturnPending));
+  SpillStaticRegs(TMP1);
+  ldr(ARMEmitter::XReg::x0, STATE, offsetof(FEXCore::Core::CpuStateFrame, ReturningStackLocation));
+  add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::r0, 0);
+  PopCalleeSavedRegisters();
+  ret();
 }
 
 DEF_OP(Jump) {
