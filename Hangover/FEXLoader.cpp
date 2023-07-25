@@ -343,3 +343,8 @@ extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_address_in_jit(DWO
   auto& Thread = GetThreadTls(NtCurrentTeb());
   return Thread->CPUBackend->IsAddressInCodeBuffer(addr) || SignalDelegator.IsAddressInDispatcher(addr);
 }
+
+extern "C" __attribute__((visibility ("default"))) void ho_request_thread_return(_TEB* ThreadTeb) {
+  auto& Thread = GetThreadTls(ThreadTeb);
+  Thread->CurrentFrame->State.ReturnPending = true;
+}
