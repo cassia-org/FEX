@@ -58,14 +58,22 @@ namespace Logging {
     }
   }
 
+  using PFN_WineLogOutput = int (STDMETHODCALLTYPE *)(const char *);
+  static PFN_WineLogOutput WineLogOutput = nullptr;
+
+  void Init() {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    WineLogOutput = reinterpret_cast<PFN_WineLogOutput>(GetProcAddress(ntdll, "__wine_dbg_output"));
+  }
+
   void MsgHandler(LogMan::DebugLevels Level, char const *Message) {
     const auto Output = fmt::format("[{}] {}\n", GetCharLevel(Level), Message);
-    write(STDOUT_FILENO, Output.c_str(), Output.size());
+    WineLogOutput(Output.c_str());
   }
 
   void AssertHandler(char const *Message) {
     const auto Output = fmt::format("[ASSERT] {}\n", Message);
-    write(STDOUT_FILENO, Output.c_str(), Output.size());
+    WineLogOutput(Output.c_str());
   }
 }
 
@@ -124,6 +132,7 @@ DummySyscallHandler SyscallHandler;
 
 static constexpr bool ParanoidTSO = false;
 extern "C" __attribute__((visibility ("default"))) void ho_init() {
+  Logging::Init();
   LogMan::Throw::InstallHandler(Logging::AssertHandler);
   LogMan::Msg::InstallHandler(Logging::MsgHandler);
 
@@ -265,7 +274,7 @@ extern "C" __attribute__((visibility ("default"))) void ho_run(uint64_t WowTeb, 
   static constexpr uint32_t RequiredContextFlags = WOW64_CONTEXT_FULL | WOW64_CONTEXT_EXTENDED_REGISTERS;
 
   if ((Context->ContextFlags & RequiredContextFlags) != RequiredContextFlags) {
-    fprintf(stderr, "Incomplete context!\n");
+    ERROR_AND_DIE_FMT("Incomplete context!");
   }
 
   LoadStateFromWinContext(Thread->CurrentFrame->State, WowTeb, Context);
