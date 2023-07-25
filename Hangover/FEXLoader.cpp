@@ -22,7 +22,10 @@ $end_info$
 #include <cstdlib>
 
 #include <windef.h>
+#include <winternl.h>
 #include "Context.h"
+
+static constexpr size_t HOFEX_TLS_THREAD_STATE = 14;
 
 // From FEXServer
 namespace Logging {
@@ -144,7 +147,6 @@ extern "C" __attribute__((visibility ("default"))) void ho_init() {
   CTX->SetSyscallHandler(&SyscallHandler);
 }
 
-static thread_local FEXCore::Core::InternalThreadState *Thread;
 static FEXCore::Core::InternalThreadState *MainThread;
 
 static void LoadStateFromWinContext(FEXCore::Core::CPUState& State, uint64_t WowTeb, WOW64_CONTEXT* Context) {
@@ -241,7 +243,12 @@ static void StoreWinContextFromState(FEXCore::Core::CPUState& State, WOW64_CONTE
   fpux_to_fpu(&Context->FloatSave, XSave);
 }
 
+static FEXCore::Core::InternalThreadState*& GetThreadTls(_TEB* Teb) {
+  return reinterpret_cast<FEXCore::Core::InternalThreadState*&>(Teb->TlsSlots[HOFEX_TLS_THREAD_STATE]);
+}
+
 extern "C" __attribute__((visibility ("default"))) void ho_run(uint64_t WowTeb, WOW64_CONTEXT* Context) {
+  auto& Thread = GetThreadTls(NtCurrentTeb());
   if (!MainThread) {
     Thread = CTX->InitCore(Context->Eip, Context->Esp);
     MainThread = Thread;
@@ -272,11 +279,13 @@ extern "C" __attribute__((visibility ("default"))) void ho_invalidate_code_range
   if (!CTX) {
     return;
   }
+  auto& Thread = GetThreadTls(NtCurrentTeb());
 
   CTX->InvalidateGuestCodeRange(Thread, Start, Length);
 }
 
 extern "C" __attribute__((visibility ("default"))) void ho_reconstruct_x86_context(WOW64_CONTEXT* WowContext, CONTEXT* Context) {
+  auto& Thread = GetThreadTls(NtCurrentTeb());
   memset(WowContext, 0, sizeof(*WowContext));
 
   WowContext->ContextFlags = WOW64_CONTEXT_ALL;
@@ -306,6 +315,7 @@ extern "C" __attribute__((visibility ("default"))) void ho_reconstruct_x86_conte
 }
 
 extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_unaligned_access_handler(CONTEXT* Context) {
+  auto& Thread = GetThreadTls(NtCurrentTeb());
   if (!Thread->CPUBackend->IsAddressInCodeBuffer(Context->Pc)) {
     // Wasn't a sigbus in JIT code
     return false;
@@ -321,5 +331,6 @@ extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_unaligned_access_h
 }
 
 extern "C" __attribute__((visibility ("default"))) BOOLEAN ho_address_in_jit(DWORD64 addr) {
+  auto& Thread = GetThreadTls(NtCurrentTeb());
   return Thread->CPUBackend->IsAddressInCodeBuffer(addr) || SignalDelegator.IsAddressInDispatcher(addr);
 }
