@@ -289,10 +289,6 @@ void Arm64Emitter::PushCalleeSavedRegisters() {
   // We need to save pairs of registers
   // We save r19-r30
   const fextl::vector<std::pair<ARMEmitter::XRegister, ARMEmitter::XRegister>> CalleeSaved = {{
-#ifdef _WIN32
-    // Platform register, Just save it twice to make logic easy.
-    {ARMEmitter::XReg::x18, ARMEmitter::XReg::x18},
-#endif
     {ARMEmitter::XReg::x19, ARMEmitter::XReg::x20},
     {ARMEmitter::XReg::x21, ARMEmitter::XReg::x22},
     {ARMEmitter::XReg::x23, ARMEmitter::XReg::x24},
@@ -363,10 +359,6 @@ void Arm64Emitter::PopCalleeSavedRegisters() {
     {ARMEmitter::XReg::x23, ARMEmitter::XReg::x24},
     {ARMEmitter::XReg::x21, ARMEmitter::XReg::x22},
     {ARMEmitter::XReg::x19, ARMEmitter::XReg::x20},
-#ifdef _WIN32
-    // Platform register.
-    {ARMEmitter::XReg::x18, ARMEmitter::XReg::zr},
-#endif
   }};
 
   for (auto &RegPair : CalleeSaved) {
