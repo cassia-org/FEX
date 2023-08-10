@@ -70,6 +70,8 @@ namespace {
   fextl::unique_ptr<FEX::DummyHandlers::DummySignalDelegator> SignalDelegator;
   fextl::unique_ptr<WowSyscallHandler> SyscallHandler;
 
+  SYSTEM_CPU_INFORMATION CpuInfo{};
+
   std::pair<NTSTATUS, TLS> GetThreadTLS(HANDLE Thread) {
     THREAD_BASIC_INFORMATION Info;
     const NTSTATUS Err = NtQueryInformationThread(Thread, ThreadBasicInformation, &Info, sizeof(Info), nullptr);
@@ -299,6 +301,14 @@ void BTCpuProcessInit() {
   CTX->SetSignalDelegator(SignalDelegator.get());
   CTX->SetSyscallHandler(SyscallHandler.get());
   CTX->InitCore(0, 0);
+
+  WineHelpers::get_cpuinfo([](uint32_t Function, uint32_t Leaf, uint32_t *Regs) {
+    const auto Result = CTX->RunCPUIDFunction(Function, Leaf);
+    Regs[0] = Result.eax;
+    Regs[1] = Result.ebx;
+    Regs[2] = Result.ecx;
+    Regs[3] = Result.edx;
+  }, &CpuInfo);
 }
 
 NTSTATUS BTCpuThreadInit() {
@@ -382,4 +392,66 @@ void BTCpuSimulate() {
     CTX->ExecuteThread(GetTLS().ThreadState());
     Context::UnlockJITContext();
   }
+}
+
+BOOLEAN WINAPI BTCpuIsProcessorFeaturePresent(UINT Feature) {
+  switch (Feature) {
+    case PF_FLOATING_POINT_PRECISION_ERRATA:
+      return FALSE;
+    case PF_FLOATING_POINT_EMULATED:
+      return FALSE;
+    case PF_COMPARE_EXCHANGE_DOUBLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_CX8);
+    case PF_MMX_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_MMX);
+     case PF_XMMI_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSE);
+    case PF_3DNOW_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_3DNOW);
+    case PF_RDTSC_INSTRUCTION_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_TSC);
+    case PF_PAE_ENABLED:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_PAE);
+    case PF_XMMI64_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSE2);
+    case PF_SSE3_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSE3);
+    case PF_SSSE3_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSSE3);
+    case PF_XSAVE_ENABLED:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_XSAVE);
+    case PF_COMPARE_EXCHANGE128:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_CX128);
+    case PF_SSE_DAZ_MODE_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_DAZ);
+    case PF_NX_ENABLED:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_NX);
+    case PF_SECOND_LEVEL_ADDRESS_TRANSLATION:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_2NDLEV);
+    case PF_VIRT_FIRMWARE_ENABLED:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_VIRT);
+    case PF_RDWRFSGSBASE_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_RDFS);
+    case PF_FASTFAIL_AVAILABLE:
+      return TRUE;
+    case PF_SSE4_1_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSE41);
+    case PF_SSE4_2_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_SSE42);
+    case PF_AVX_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_AVX);
+    case PF_AVX2_INSTRUCTIONS_AVAILABLE:
+      return !!(CpuInfo.ProcessorFeatureBits & CPU_FEATURE_AVX2);
+    default:
+      LogMan::Msg::DFmt( "Unknown CPU feature: {:X}", Feature);
+      return FALSE;
+  }
+}
+
+BOOLEAN BTCpuUpdateProcessorInformation(SYSTEM_CPU_INFORMATION *Info) {
+  Info->ProcessorArchitecture = CpuInfo.ProcessorArchitecture;
+  Info->ProcessorLevel = CpuInfo.ProcessorLevel;
+  Info->ProcessorRevision = CpuInfo.ProcessorRevision;
+  Info->ProcessorFeatureBits = CpuInfo.ProcessorFeatureBits;
+  return TRUE;
 }

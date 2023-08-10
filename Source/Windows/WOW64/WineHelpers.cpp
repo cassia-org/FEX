@@ -63,4 +63,110 @@ void fpux_to_fpu( WOW64_FLOATING_SAVE_AREA *fpu, const _XSAVE_FORMAT *fpux )
     }
 }
 
+// From dlls/ntdll/unix/system.c
+#define AUTH	0x68747541	/* "Auth" */
+#define ENTI	0x69746e65	/* "enti" */
+#define CAMD	0x444d4163	/* "cAMD" */
+
+#define GENU	0x756e6547	/* "Genu" */
+#define INEI	0x49656e69	/* "ineI" */
+#define NTEL	0x6c65746e	/* "ntel" */
+
+void get_cpuinfo( do_cpuid_t do_cpuid, SYSTEM_CPU_INFORMATION *info )
+{
+    UINT32 regs[4], regs2[4], regs3[4];
+    ULONGLONG features;
+
+    info->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
+
+    /* We're at least a 386 */
+    features = CPU_FEATURE_VME | CPU_FEATURE_X86 | CPU_FEATURE_PGE;
+    info->ProcessorLevel = 3;
+
+    do_cpuid( 0x00000000, 0, regs );  /* get standard cpuid level and vendor name */
+    if (regs[0]>=0x00000001)   /* Check for supported cpuid version */
+    {
+        do_cpuid( 0x00000001, 0, regs2 ); /* get cpu features */
+        if (regs2[3] & (1 << 3 )) features |= CPU_FEATURE_PSE;
+        if (regs2[3] & (1 << 4 )) features |= CPU_FEATURE_TSC;
+        if (regs2[3] & (1 << 6 )) features |= CPU_FEATURE_PAE;
+        if (regs2[3] & (1 << 8 )) features |= CPU_FEATURE_CX8;
+        if (regs2[3] & (1 << 11)) features |= CPU_FEATURE_SEP;
+        if (regs2[3] & (1 << 12)) features |= CPU_FEATURE_MTRR;
+        if (regs2[3] & (1 << 15)) features |= CPU_FEATURE_CMOV;
+        if (regs2[3] & (1 << 16)) features |= CPU_FEATURE_PAT;
+        if (regs2[3] & (1 << 23)) features |= CPU_FEATURE_MMX;
+        if (regs2[3] & (1 << 24)) features |= CPU_FEATURE_FXSR;
+        if (regs2[3] & (1 << 25)) features |= CPU_FEATURE_SSE;
+        if (regs2[3] & (1 << 26)) features |= CPU_FEATURE_SSE2;
+        if (regs2[2] & (1 << 0 )) features |= CPU_FEATURE_SSE3;
+        if (regs2[2] & (1 << 9 )) features |= CPU_FEATURE_SSSE3;
+        if (regs2[2] & (1 << 13)) features |= CPU_FEATURE_CX128;
+        if (regs2[2] & (1 << 19)) features |= CPU_FEATURE_SSE41;
+        if (regs2[2] & (1 << 20)) features |= CPU_FEATURE_SSE42;
+        if (regs2[2] & (1 << 27)) features |= CPU_FEATURE_XSAVE;
+        if (regs2[2] & (1 << 28)) features |= CPU_FEATURE_AVX;
+        if ((regs2[3] & (1 << 26)) && (regs2[3] & (1 << 24))) /* has SSE2 and FXSAVE/FXRSTOR */
+            features |= CPU_FEATURE_DAZ;
+
+        if (regs[0] >= 0x00000007)
+        {
+            do_cpuid( 0x00000007, 0, regs3 ); /* get extended features */
+            if (regs3[1] & (1 << 5)) features |= CPU_FEATURE_AVX2;
+        }
+
+        if (regs[1] == AUTH && regs[3] == ENTI && regs[2] == CAMD)
+        {
+            info->ProcessorLevel = (regs2[0] >> 8) & 0xf; /* family */
+            if (info->ProcessorLevel == 0xf)  /* AMD says to add the extended family to the family if family is 0xf */
+                info->ProcessorLevel += (regs2[0] >> 20) & 0xff;
+
+            /* repack model and stepping to make a "revision" */
+            info->ProcessorRevision  = ((regs2[0] >> 16) & 0xf) << 12; /* extended model */
+            info->ProcessorRevision |= ((regs2[0] >> 4 ) & 0xf) << 8;  /* model          */
+            info->ProcessorRevision |= regs2[0] & 0xf;                 /* stepping       */
+
+            do_cpuid( 0x80000000, 0, regs );  /* get vendor cpuid level */
+            if (regs[0] >= 0x80000001)
+            {
+                do_cpuid( 0x80000001, 0, regs2 );  /* get vendor features */
+                if (regs2[2] & (1 << 2))   features |= CPU_FEATURE_VIRT;
+                if (regs2[3] & (1 << 20))  features |= CPU_FEATURE_NX;
+                if (regs2[3] & (1 << 27))  features |= CPU_FEATURE_TSC;
+                if (regs2[3] & (1u << 31)) features |= CPU_FEATURE_3DNOW;
+            }
+        }
+        else if (regs[1] == GENU && regs[3] == INEI && regs[2] == NTEL)
+        {
+            info->ProcessorLevel = ((regs2[0] >> 8) & 0xf) + ((regs2[0] >> 20) & 0xff); /* family + extended family */
+            if(info->ProcessorLevel == 15) info->ProcessorLevel = 6;
+
+            /* repack model and stepping to make a "revision" */
+            info->ProcessorRevision  = ((regs2[0] >> 16) & 0xf) << 12; /* extended model */
+            info->ProcessorRevision |= ((regs2[0] >> 4 ) & 0xf) << 8;  /* model          */
+            info->ProcessorRevision |= regs2[0] & 0xf;                 /* stepping       */
+
+            if(regs2[2] & (1 << 5))  features |= CPU_FEATURE_VIRT;
+            if(regs2[3] & (1 << 21)) features |= CPU_FEATURE_DS;
+
+            do_cpuid( 0x80000000, 0, regs );  /* get vendor cpuid level */
+            if (regs[0] >= 0x80000001)
+            {
+                do_cpuid( 0x80000001, 0, regs2 );  /* get vendor features */
+                if (regs2[3] & (1 << 20)) features |= CPU_FEATURE_NX;
+                if (regs2[3] & (1 << 27)) features |= CPU_FEATURE_TSC;
+            }
+        }
+        else
+        {
+            info->ProcessorLevel = (regs2[0] >> 8) & 0xf; /* family */
+
+            /* repack model and stepping to make a "revision" */
+            info->ProcessorRevision = ((regs2[0] >> 4 ) & 0xf) << 8;  /* model    */
+            info->ProcessorRevision |= regs2[0] & 0xf;                /* stepping */
+        }
+    }
+    info->ProcessorFeatureBits = features;
+}
+
 }
