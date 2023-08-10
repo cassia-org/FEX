@@ -40,15 +40,33 @@ $end_info$
 #include <wine/debug.h>
 #include <wine/unixlib.h>
 
+namespace ControlBits {
+  // When this is unset, a thread can be safely interrupted and have its context recovered
+  // IMPORTANT: This can only safely be written by the owning thread
+  static constexpr uint32_t IN_JIT{1U << 0};
+
+  // JIT entry polls this bit until it is unset, at which point CONTROL_IN_JIT will be set
+  static constexpr uint32_t PAUSED{1U << 1};
+
+  // When this is set, the CPU context stored in the CPU area has not yet been flushed to the FEX TLS
+  static constexpr uint32_t WOW_CPU_AREA_DIRTY{1U << 2};
+};
+
 struct TLS {
   enum class Slot : size_t {
     ENTRY_CONTEXT = WOW64_TLS_MAX_NUMBER,
+    CONTROL_WORD = WOW64_TLS_MAX_NUMBER - 1,
     THREAD_STATE = WOW64_TLS_MAX_NUMBER - 2,
   };
 
   _TEB *TEB;
 
   explicit TLS(_TEB *TEB) : TEB(TEB) {}
+
+  std::atomic<uint32_t> &ControlWord() const {
+    // TODO: Change this when libc++ gains std::atomic_ref support
+    return reinterpret_cast<std::atomic<uint32_t> &>(TEB->TlsSlots[FEXCore::ToUnderlying(Slot::CONTROL_WORD)]);
+  }
 
   CONTEXT *&EntryContext() const {
     return reinterpret_cast<CONTEXT *&>(TEB->TlsSlots[FEXCore::ToUnderlying(Slot::ENTRY_CONTEXT)]);
@@ -63,6 +81,7 @@ class WowSyscallHandler;
 
 namespace {
   namespace BridgeInstrs {
+    // These are variables are directly jumped to by the guest to make system calls
     uint16_t Syscall{0x2ecd};
     uint16_t UnixCall{0x2ecd};
   }
@@ -72,6 +91,8 @@ namespace {
   fextl::unique_ptr<WowSyscallHandler> SyscallHandler;
 
   SYSTEM_CPU_INFORMATION CpuInfo{};
+
+  std::mutex ThreadSuspendLock;
 
   std::pair<NTSTATUS, TLS> GetThreadTLS(HANDLE Thread) {
     THREAD_BASIC_INFORMATION Info;
@@ -202,15 +223,7 @@ namespace Context {
     return RtlWow64SetThreadContext(Thread, &TmpWowContext);
   }
 
-  WOW64_CONTEXT ReconstructWowContext(CONTEXT *Context) {
-    WOW64_CONTEXT WowContext{
-      .ContextFlags = WOW64_CONTEXT_ALL,
-    };
-
-    auto *XSave = reinterpret_cast<XSAVE_FORMAT *>(WowContext.ExtendedRegisters);
-    XSave->ControlWord = 0x27f;
-    XSave->MxCsr = 0x1f80;
-
+  void ReconstructThreadState(CONTEXT *Context) {
     const auto &Config = SignalDelegator->GetConfig();
     auto *Thread = GetTLS().ThreadState();
     auto &State = Thread->CurrentFrame->State;
@@ -226,8 +239,20 @@ namespace Context {
     for (size_t i = 0; i < Config.SRAFPRCount; i++) {
       memcpy(State.xmm.sse.data[i], &Context->V[Config.SRAFPRMapping[i]], sizeof(__uint128_t));
     }
+  }
 
-    Context::StoreWowContextFromState(State, &WowContext);
+  WOW64_CONTEXT ReconstructWowContext(CONTEXT *Context) {
+    ReconstructThreadState(Context);
+
+    WOW64_CONTEXT WowContext{
+      .ContextFlags = WOW64_CONTEXT_ALL,
+    };
+
+    auto *XSave = reinterpret_cast<XSAVE_FORMAT *>(WowContext.ExtendedRegisters);
+    XSave->ControlWord = 0x27f;
+    XSave->MxCsr = 0x1f80;
+
+    Context::StoreWowContextFromState(GetTLS().ThreadState()->CurrentFrame->State, &WowContext);
 
     return WowContext;
   }
@@ -244,6 +269,52 @@ namespace Context {
     }
 
     Context->Pc += Result.second;
+    return true;
+  }
+
+  void LockJITContext() {
+    uint32_t Expected = GetTLS().ControlWord().load(), New;
+
+    // Spin until PAUSED is unset, setting IN_JIT when that occurs
+    do {
+      Expected = Expected & ~ControlBits::PAUSED;
+      New = (Expected | ControlBits::IN_JIT) & ~ControlBits::WOW_CPU_AREA_DIRTY;
+    } while (!GetTLS().ControlWord().compare_exchange_weak(Expected, New, std::memory_order::relaxed));
+    std::atomic_signal_fence(std::memory_order::seq_cst);
+
+    // If the CPU area is dirty, flush it to the JIT context before reentry
+    if (Expected & ControlBits::WOW_CPU_AREA_DIRTY) {
+      WOW64_CONTEXT *WowContext;
+      RtlWow64GetCurrentCpuArea(nullptr, reinterpret_cast<void **>(&WowContext), nullptr);
+      Context::LoadStateFromWowContext(GetTLS().ThreadState()->CurrentFrame->State, GetWowTEB(NtCurrentTeb()), WowContext);
+    }
+  }
+
+  void UnlockJITContext() {
+    std::atomic_signal_fence(std::memory_order::seq_cst);
+    GetTLS().ControlWord().fetch_and(~ControlBits::IN_JIT, std::memory_order::relaxed);
+  }
+
+  bool HandleSuspendInterrupt(CONTEXT *Context, uint64_t FaultAddress) {
+    if (FaultAddress != reinterpret_cast<uint64_t>(&GetTLS().ThreadState()->InterruptFaultPage)) {
+      return false;
+    }
+
+    void *TmpAddress = reinterpret_cast<void *>(FaultAddress);
+    SIZE_T TmpSize = FHU::FEX_PAGE_SIZE;
+    ULONG TmpProt;
+    NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, PAGE_READWRITE, &TmpProt);
+
+    // Since interrupts only happen at the start of blocks, the reconstructed state should be entirely accurate
+    ReconstructThreadState(Context);
+
+    // Yield to the suspender
+    UnlockJITContext();
+    LockJITContext();
+
+    // Adjust context to return to the dispatcher, reloading SRA from thread state
+    const auto &Config = SignalDelegator->GetConfig();
+    Context->Pc = Config.AbsoluteLoopTopAddressFillSRA;
     return true;
   }
 }
@@ -369,10 +440,6 @@ public:
     uint64_t ReturnRSP = Frame->State.gregs[FEXCore::X86State::REG_RSP] + 4; // Stack pointer after popping return address
     uint64_t ReturnRAX = 0;
 
-    // APCs/User Callbacks end up calling into the JIT from Wow64SystemService, and since the FEX return stack pointer
-    // is stored in TLS, the reentrant call ends up overwriting the callers stored return stack location. Stash it here
-    // to avoid that breaking returns used in thread suspend
-    const auto StashedStackLocation = Frame->ReturningStackLocation;
     if (Frame->State.rip == (uint64_t)&BridgeInstrs::UnixCall) {
       struct StackLayout {
         unixlib_handle_t Handle;
@@ -382,14 +449,16 @@ public:
 
       ReturnRSP += sizeof(StackLayout);
 
-      // Skip unlocking the JIT context here since the atomic accesses hurt unix call perfomance quite badly
-      // NOTE: this will break suspension if there are any infinitely-blocking unix calls
+      Context::UnlockJITContext();
       ReturnRAX = static_cast<uint64_t>(__wine_unix_call(StackArgs->Handle, StackArgs->ID, ULongToPtr(StackArgs->Args)));
+      Context::LockJITContext();
     } else if (Frame->State.rip == (uint64_t)&BridgeInstrs::Syscall) {
       const uint64_t EntryRAX = Frame->State.gregs[FEXCore::X86State::REG_RAX];
 
+      Context::UnlockJITContext();
       ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX),
                                                              reinterpret_cast<UINT *>(ReturnRSP + 4)));
+      Context::LockJITContext();
 
     }
     // If a new context has been set, use it directly and don't return to the syscall caller
@@ -399,7 +468,6 @@ public:
       Frame->State.gregs[FEXCore::X86State::REG_RSP] = ReturnRSP;
       Frame->State.rip = ReturnRIP;
     }
-    Frame->ReturningStackLocation = StashedStackLocation;
 
     // NORETURNEDRESULT causes this result to be ignored since we restore all registers back from memory after a syscall anyway
     return 0;
@@ -484,8 +552,10 @@ NTSTATUS BTCpuGetContext(HANDLE Thread, HANDLE Process, void *Unknown, WOW64_CON
     return Err;
   }
 
-  if (Err = Context::FlushThreadStateContext(Thread); Err) {
-    return Err;
+  if (!(TLS.ControlWord().load(std::memory_order::relaxed) & ControlBits::WOW_CPU_AREA_DIRTY)) {
+    if (Err = Context::FlushThreadStateContext(Thread); Err) {
+      return Err;
+    }
   }
 
   return RtlWow64GetThreadContext(Thread, Context);
@@ -501,8 +571,10 @@ NTSTATUS BTCpuSetContext(HANDLE Thread, HANDLE Process, void *Unknown, WOW64_CON
   // Back-up the input context incase we've been passed the CPU area (the flush below would wipe it out otherwise)
   WOW64_CONTEXT TmpContext = *Context;
 
-  if (Err = Context::FlushThreadStateContext(Thread); Err) {
-    return Err;
+  if (!(TLS.ControlWord().load(std::memory_order::relaxed) & ControlBits::WOW_CPU_AREA_DIRTY)) {
+    if (Err = Context::FlushThreadStateContext(Thread); Err) {
+      return Err;
+    }
   }
 
   // Merge the input context into the CPU area then pass the full context into the JIT
@@ -530,16 +602,93 @@ void BTCpuSimulate() {
     GetTLS().EntryContext() = &entry_context;
   }
 
-  while (1) {
-    Context::LockJITContext();
-    CTX->ExecuteThread(GetTLS().ThreadState());
-    Context::UnlockJITContext();
+  Context::LockJITContext();
+  CTX->ExecuteThread(GetTLS().ThreadState());
+  Context::UnlockJITContext();
+}
+
+NTSTATUS BTCpuSuspendLocalThread(HANDLE Thread, ULONG *Count) {
+  THREAD_BASIC_INFORMATION Info;
+  if (NTSTATUS Err = NtQueryInformationThread(Thread, ThreadBasicInformation, &Info, sizeof(Info), nullptr); Err) {
+    return Err;
   }
+
+  const auto ThreadTID = reinterpret_cast<uint64_t>(Info.ClientId.UniqueThread);
+  if (ThreadTID == GetCurrentThreadId()) {
+    LogMan::Msg::DFmt("Suspending self");
+    // Mark the CPU area as dirty, to force the JIT context to be restored from it on entry as it may be changed using
+    // SetThreadContext (which doesn't use the BTCpu API)
+    if (!(GetTLS().ControlWord().fetch_or(ControlBits::WOW_CPU_AREA_DIRTY, std::memory_order::relaxed) &
+                            ControlBits::WOW_CPU_AREA_DIRTY)) {
+      if (NTSTATUS Err = Context::FlushThreadStateContext(Thread); Err) {
+        return Err;
+      }
+    }
+
+    return NtSuspendThread(Thread, Count);
+  }
+
+  LogMan::Msg::DFmt("Suspending thread: {:X}", ThreadTID);
+
+  auto [Err, TLS] = GetThreadTLS(Thread);
+  if (Err) {
+    return Err;
+  }
+
+  std::scoped_lock Lock(ThreadSuspendLock);
+  // If CONTROL_IN_JIT is unset at this point, then it can never be set (and thus the JIT cannot be reentered) as
+  // CONTROL_PAUSED has been set, as such, while this may redundantly request interrupts in rare cases it will never
+  // miss them
+  if (TLS.ControlWord().fetch_or(ControlBits::PAUSED, std::memory_order::relaxed) & ControlBits::IN_JIT) {
+    LogMan::Msg::DFmt("Thread {:X} is in JIT, polling for interrupt", ThreadTID);
+
+    ULONG TmpProt;
+    void *TmpAddress = &TLS.ThreadState()->InterruptFaultPage;
+    SIZE_T TmpSize = FHU::FEX_PAGE_SIZE;
+    NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, PAGE_READONLY, &TmpProt);
+  }
+
+  // Spin until the JIT is interrupted
+  while (TLS.ControlWord().load() & ControlBits::IN_JIT);
+
+  // The JIT has now been interrupted and the context stored in the thread's CPU area is up-to-date
+  if (Err = NtSuspendThread(Thread, Count); Err) {
+    TLS.ControlWord().fetch_and(~ControlBits::PAUSED, std::memory_order::relaxed);
+    return Err;
+  }
+
+  CONTEXT TmpContext{
+    .ContextFlags = CONTEXT_INTEGER,
+  };
+
+  // NtSuspendThread may return before the thread is actually suspended, so a sync operation like NtGetContextThread
+  // needs to be called to ensure it is before we unset CONTROL_PAUSED
+  std::ignore = NtGetContextThread(Thread, &TmpContext);
+
+  // Mark the CPU area as dirty, to force the JIT context to be restored from it on entry as it may be changed using
+  // SetThreadContext (which doesn't use the BTCpu API)
+  if (!(TLS.ControlWord().fetch_or(ControlBits::WOW_CPU_AREA_DIRTY, std::memory_order::relaxed) & ControlBits::WOW_CPU_AREA_DIRTY)) {
+    if (Err = Context::FlushThreadStateContext(Thread); Err) {
+      return Err;
+    }
+  }
+
+  LogMan::Msg::DFmt("Thread suspended: {:X}", ThreadTID);
+
+  // Now the thread is suspended on the host, unset CONTROL_PAUSED so that NtResumeThread will
+  // continue execution in the JIT
+  TLS.ControlWord().fetch_and(~ControlBits::PAUSED, std::memory_order::relaxed);
+
+  return Err;
 }
 
 NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS *Ptrs) {
   auto *Context = Ptrs->ContextRecord;
   const auto *Exception = Ptrs->ExceptionRecord;
+  if (Exception->ExceptionCode == EXCEPTION_DATATYPE_MISALIGNMENT && Context::HandleUnalignedAccess(Context)) {
+    LogMan::Msg::DFmt("Handled unaligned atomic: new pc: {:X}", Context->Pc);
+    NtContinue(Context, FALSE);
+  }
 
   if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
@@ -548,11 +697,11 @@ NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS *Ptrs) {
       LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", Context->Pc, FaultAddress);
       NtContinue(Context, FALSE);
     }
-  }
 
-  if (Exception->ExceptionCode == EXCEPTION_DATATYPE_MISALIGNMENT && Context::HandleUnalignedAccess(Context)) {
-    LogMan::Msg::DFmt("Handled unaligned atomic: new pc: {:X}", Context->Pc);
-    NtContinue(Context, FALSE);
+    if (Context::HandleSuspendInterrupt(Context, FaultAddress)) {
+      LogMan::Msg::DFmt("Resumed from suspend");
+      NtContinue(Context, FALSE);
+    }
   }
 
   if (!IsAddressInJit(Context->Pc)) {
@@ -565,6 +714,7 @@ NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS *Ptrs) {
   LogMan::Msg::DFmt("pc: {:X} eip: {:X}", Context->Pc, WowContext.Eip);
 
   BTCpuSetContext(GetCurrentThread(), GetCurrentProcess(), nullptr, &WowContext);
+  Context::UnlockJITContext();
 
   // Replace the host context with one captured before JIT entry so host code can unwind
   memcpy(Context, GetTLS().EntryContext(), sizeof(*Context));
@@ -577,7 +727,7 @@ void BTCpuFlushInstructionCache2(const void *Address, SIZE_T Size) {
 }
 
 void BTCpuNotifyMemoryAlloc(void *Address, SIZE_T Size, ULONG Type, ULONG Prot) {
-  Invalidation::HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), 
+  Invalidation::HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size),
                                                    Prot);
 }
 
