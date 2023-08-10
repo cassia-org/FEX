@@ -32,6 +32,10 @@ class DummySignalDelegator final : public FEXCore::SignalDelegator, public FEXCo
     return GetTLSThread();
   }
 
+  const SignalDelegatorConfig &GetConfig() const {
+    return Config;
+  }
+
   protected:
     // Called from the thunk handler to handle the signal
     void HandleGuestSignal(FEXCore::Core::InternalThreadState *Thread, int Signal, void *Info, void *UContext) override {}
