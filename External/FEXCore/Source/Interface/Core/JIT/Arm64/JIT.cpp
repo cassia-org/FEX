@@ -791,6 +791,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry,
   adr(TMP1, &JITCodeHeaderLabel);
   str(TMP1, STATE, offsetof(FEXCore::Core::CPUState, InlineJITBlockHeader));
 
+  // Trigger a fault if there are any pending interrupts
+  strb(ARMEmitter::XReg::zr, STATE, offsetof(FEXCore::Core::InternalThreadState, InterruptFaultPage) -
+                                    offsetof(FEXCore::Core::InternalThreadState, BaseFrameState));
+
   if (GDBEnabled) {
     auto GDBSize = CTX->Dispatcher->GenerateGDBPauseCheck(CodeData.BlockEntry, Entry);
     CursorIncrement(GDBSize);
